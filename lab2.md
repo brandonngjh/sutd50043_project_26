@@ -160,7 +160,7 @@ Implement the remaining skeleton methods in:
 
 * src/java/simpledb/storage/HeapPage.java
 * src/java/simpledb/storage/HeapFile.java<br>
-  (Note that you do not necessarily need to implement writePage at this point).
+  (Note that you do not necessarily need to implement flushPage at this point).
 
 ***
 
