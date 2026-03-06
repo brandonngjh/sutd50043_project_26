@@ -33,13 +33,17 @@ public class BufferPool {
     constructor instead. */
     public static final int DEFAULT_PAGES = 50;
 
+    private final int numPages;
+    private final ConcurrentHashMap<PageId, Page> pageCache;
+
     /**
      * Creates a BufferPool that caches up to numPages pages.
      *
      * @param numPages maximum number of pages in this buffer pool.
      */
     public BufferPool(int numPages) {
-        // some code goes here
+        this.numPages = numPages;
+        this.pageCache = new ConcurrentHashMap<>();
     }
     
     public static int getPageSize() {
@@ -71,10 +75,21 @@ public class BufferPool {
      * @param pid the ID of the requested page
      * @param perm the requested permissions on the page
      */
-    public  Page getPage(TransactionId tid, PageId pid, Permissions perm)
-        throws TransactionAbortedException, DbException {
-        // some code goes here
-        return null;
+    public Page getPage(TransactionId tid, PageId pid, Permissions perm)
+            throws TransactionAbortedException, DbException {
+        Page cachedPage = pageCache.get(pid);
+        if (cachedPage != null) {
+            return cachedPage;
+        }
+
+        if (pageCache.size() >= numPages) {
+            throw new DbException("BufferPool is full");
+        }
+
+        DbFile dbFile = Database.getCatalog().getDatabaseFile(pid.getTableId());
+        Page page = dbFile.readPage(pid);
+        pageCache.put(pid, page);
+        return page;
     }
 
     /**
@@ -147,15 +162,15 @@ public class BufferPool {
      * other pages that are updated. May block if the lock(s) cannot be acquired.
      *
      * Marks any pages that were dirtied by the operation as dirty by calling
-     * their markDirty bit, and adds versions of any pages that have 
-     * been dirtied to the cache (replacing any existing versions of those pages) so 
-     * that future requests see up-to-date pages. 
+     * their markDirty bit, and adds versions of any pages that have
+     * been dirtied to the cache (replacing any existing versions of those pages) so
+     * that future requests see up-to-date pages.
      *
      * @param tid the transaction deleting the tuple.
      * @param t the tuple to delete
      */
     public  void deleteTuple(TransactionId tid, Tuple t)
-        throws DbException, IOException, TransactionAbortedException {
+            throws DbException, IOException, TransactionAbortedException {
         // some code goes here
         // not necessary for lab1
     }
@@ -178,7 +193,7 @@ public class BufferPool {
         
         Also used by B+ tree files to ensure that deleted pages
         are removed from the cache so they can be reused safely
-    */
+     */
     public synchronized void discardPage(PageId pid) {
         // some code goes here
         // not necessary for lab1

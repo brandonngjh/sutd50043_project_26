@@ -23,12 +23,28 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class Catalog {
 
+    private static class Table {
+        private final DbFile file;
+        private final String name;
+        private final String pkeyField;
+
+        private Table(DbFile file, String name, String pkeyField) {
+            this.file = file;
+            this.name = name;
+            this.pkeyField = pkeyField;
+        }
+    }
+
+    private final ConcurrentHashMap<Integer, Table> tablesById;
+    private final ConcurrentHashMap<String, Integer> tableIdsByName;
+
     /**
      * Constructor.
      * Creates a new, empty catalog.
      */
     public Catalog() {
-        // some code goes here
+        this.tablesById = new ConcurrentHashMap<>();
+        this.tableIdsByName = new ConcurrentHashMap<>();
     }
 
     /**
@@ -41,7 +57,24 @@ public class Catalog {
      * @param pkeyField the name of the primary key field
      */
     public void addTable(DbFile file, String name, String pkeyField) {
-        // some code goes here
+        if (file == null || name == null) {
+            throw new IllegalArgumentException("file and name cannot be null");
+        }
+
+        int tableId = file.getId();
+
+        Integer existingIdForName = tableIdsByName.get(name);
+        if (existingIdForName != null) {
+            tablesById.remove(existingIdForName);
+        }
+
+        Table existingById = tablesById.get(tableId);
+        if (existingById != null) {
+            tableIdsByName.remove(existingById.name);
+        }
+
+        tablesById.put(tableId, new Table(file, name, pkeyField));
+        tableIdsByName.put(name, tableId);
     }
 
     public void addTable(DbFile file, String name) {
@@ -64,8 +97,10 @@ public class Catalog {
      * @throws NoSuchElementException if the table doesn't exist
      */
     public int getTableId(String name) throws NoSuchElementException {
-        // some code goes here
-        return 0;
+        if (name == null || !tableIdsByName.containsKey(name)) {
+            throw new NoSuchElementException();
+        }
+        return tableIdsByName.get(name);
     }
 
     /**
@@ -75,8 +110,11 @@ public class Catalog {
      * @throws NoSuchElementException if the table doesn't exist
      */
     public TupleDesc getTupleDesc(int tableid) throws NoSuchElementException {
-        // some code goes here
-        return null;
+        Table table = tablesById.get(tableid);
+        if (table == null) {
+            throw new NoSuchElementException();
+        }
+        return table.file.getTupleDesc();
     }
 
     /**
@@ -86,28 +124,37 @@ public class Catalog {
      *     function passed to addTable
      */
     public DbFile getDatabaseFile(int tableid) throws NoSuchElementException {
-        // some code goes here
-        return null;
+        Table table = tablesById.get(tableid);
+        if (table == null) {
+            throw new NoSuchElementException();
+        }
+        return table.file;
     }
 
     public String getPrimaryKey(int tableid) {
-        // some code goes here
-        return null;
+        Table table = tablesById.get(tableid);
+        if (table == null) {
+            throw new NoSuchElementException();
+        }
+        return table.pkeyField;
     }
 
     public Iterator<Integer> tableIdIterator() {
-        // some code goes here
-        return null;
+        return tablesById.keySet().iterator();
     }
 
     public String getTableName(int id) {
-        // some code goes here
-        return null;
+        Table table = tablesById.get(id);
+        if (table == null) {
+            throw new NoSuchElementException();
+        }
+        return table.name;
     }
     
     /** Delete all tables from the catalog */
     public void clear() {
-        // some code goes here
+        tablesById.clear();
+        tableIdsByName.clear();
     }
     
     /**
@@ -116,14 +163,14 @@ public class Catalog {
      */
     public void loadSchema(String catalogFile) {
         String line = "";
-        String baseFolder=new File(new File(catalogFile).getAbsolutePath()).getParent();
+        String baseFolder = new File(new File(catalogFile).getAbsolutePath()).getParent();
         try {
             BufferedReader br = new BufferedReader(new FileReader(catalogFile));
             
             while ((line = br.readLine()) != null) {
-                //assume line is of the format name (field type, field type, ...)
+                // assume line is of the format name (field type, field type, ...)
                 String name = line.substring(0, line.indexOf("(")).trim();
-                //System.out.println("TABLE NAME: " + name);
+                // System.out.println("TABLE NAME: " + name);
                 String fields = line.substring(line.indexOf("(") + 1, line.indexOf(")")).trim();
                 String[] els = fields.split(",");
                 ArrayList<String> names = new ArrayList<>();
@@ -152,17 +199,16 @@ public class Catalog {
                 Type[] typeAr = types.toArray(new Type[0]);
                 String[] namesAr = names.toArray(new String[0]);
                 TupleDesc t = new TupleDesc(typeAr, namesAr);
-                HeapFile tabHf = new HeapFile(new File(baseFolder+"/"+name + ".dat"), t);
-                addTable(tabHf,name,primaryKey);
+                HeapFile tabHf = new HeapFile(new File(baseFolder + "/" + name + ".dat"), t);
+                addTable(tabHf, name, primaryKey);
                 System.out.println("Added table : " + name + " with schema " + t);
             }
         } catch (IOException e) {
             e.printStackTrace();
             System.exit(0);
         } catch (IndexOutOfBoundsException e) {
-            System.out.println ("Invalid catalog entry : " + line);
+            System.out.println("Invalid catalog entry : " + line);
             System.exit(0);
         }
     }
 }
-
