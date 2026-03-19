@@ -38,7 +38,7 @@ public class HeapPageId implements PageId {
      * @see BufferPool
      */
     public int hashCode() {
-        return 31 * tableId + pgNo;
+        return java.util.Objects.hash(tableId, pgNo);
     }
 
     /**
@@ -49,12 +49,8 @@ public class HeapPageId implements PageId {
      *   ids are the same)
      */
     public boolean equals(Object o) {
-        if (this == o) {
-            return true;
-        }
-        if (!(o instanceof HeapPageId)) {
+        if (!(o instanceof HeapPageId))
             return false;
-        }
         HeapPageId other = (HeapPageId) o;
         return this.tableId == other.tableId && this.pgNo == other.pgNo;
     }

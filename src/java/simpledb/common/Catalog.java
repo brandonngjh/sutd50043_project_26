@@ -18,7 +18,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * For now, this is a stub catalog that must be populated with tables by a
  * user program before it can be used -- eventually, this should be converted
  * to a catalog that reads a catalog table from disk.
- * 
+ *
  * @Threadsafe
  */
 public class Catalog {
@@ -43,33 +43,32 @@ public class Catalog {
      * Creates a new, empty catalog.
      */
     public Catalog() {
-        this.tablesById = new ConcurrentHashMap<>();
-        this.tableIdsByName = new ConcurrentHashMap<>();
+        tablesById = new ConcurrentHashMap<>();
+        tableIdsByName = new ConcurrentHashMap<>();
     }
 
     /**
      * Add a new table to the catalog.
      * This table's contents are stored in the specified DbFile.
-     * If there exists a table with the same name or ID, replace that old table with this one. 
+     * If there exists a table with the same name or ID, replace that old table with this one.
      * @param file the contents of the table to add;  file.getId() is the identfier of
-     *    this file/tupledesc param for the calls getTupleDesc and getFile. 
-     * @param name the name of the table -- may be an empty string.  May not be null.  
+     *    this file/tupledesc param for the calls getTupleDesc and getFile.
+     * @param name the name of the table -- may be an empty string.  May not be null.
      * @param pkeyField the name of the primary key field
      */
-    public void addTable(DbFile file, String name, String pkeyField) {
+    public synchronized void addTable(DbFile file, String name, String pkeyField) {
         if (file == null || name == null) {
             throw new IllegalArgumentException("file and name cannot be null");
         }
-
-        int tableId = file.getId();
+        final int tableId = file.getId();
 
         Integer existingIdForName = tableIdsByName.get(name);
-        if (existingIdForName != null) {
+        if (existingIdForName != null && existingIdForName != tableId) {
             tablesById.remove(existingIdForName);
         }
 
         Table existingById = tablesById.get(tableId);
-        if (existingById != null) {
+        if (existingById != null && !existingById.name.equals(name)) {
             tableIdsByName.remove(existingById.name);
         }
 
@@ -97,9 +96,8 @@ public class Catalog {
      * @throws NoSuchElementException if the table doesn't exist
      */
     public int getTableId(String name) throws NoSuchElementException {
-        if (name == null || !tableIdsByName.containsKey(name)) {
-            throw new NoSuchElementException();
-        }
+        if (name == null || !tableIdsByName.containsKey(name))
+            throw new NoSuchElementException("Table not found: " + name);
         return tableIdsByName.get(name);
     }
 
@@ -111,9 +109,8 @@ public class Catalog {
      */
     public TupleDesc getTupleDesc(int tableid) throws NoSuchElementException {
         Table table = tablesById.get(tableid);
-        if (table == null) {
-            throw new NoSuchElementException();
-        }
+        if (table == null)
+            throw new NoSuchElementException("Table not found: " + tableid);
         return table.file.getTupleDesc();
     }
 
@@ -125,16 +122,15 @@ public class Catalog {
      */
     public DbFile getDatabaseFile(int tableid) throws NoSuchElementException {
         Table table = tablesById.get(tableid);
-        if (table == null) {
-            throw new NoSuchElementException();
-        }
+        if (table == null)
+            throw new NoSuchElementException("Table not found: " + tableid);
         return table.file;
     }
 
     public String getPrimaryKey(int tableid) {
         Table table = tablesById.get(tableid);
         if (table == null) {
-            throw new NoSuchElementException();
+            throw new NoSuchElementException("Table not found: " + tableid);
         }
         return table.pkeyField;
     }
@@ -146,31 +142,31 @@ public class Catalog {
     public String getTableName(int id) {
         Table table = tablesById.get(id);
         if (table == null) {
-            throw new NoSuchElementException();
+            throw new NoSuchElementException("Table not found: " + id);
         }
         return table.name;
     }
-    
+
     /** Delete all tables from the catalog */
-    public void clear() {
+    public synchronized void clear() {
         tablesById.clear();
         tableIdsByName.clear();
     }
-    
+
     /**
      * Reads the schema from a file and creates the appropriate tables in the database.
      * @param catalogFile
      */
     public void loadSchema(String catalogFile) {
         String line = "";
-        String baseFolder = new File(new File(catalogFile).getAbsolutePath()).getParent();
+        String baseFolder=new File(new File(catalogFile).getAbsolutePath()).getParent();
         try {
             BufferedReader br = new BufferedReader(new FileReader(catalogFile));
-            
+
             while ((line = br.readLine()) != null) {
-                // assume line is of the format name (field type, field type, ...)
+                //assume line is of the format name (field type, field type, ...)
                 String name = line.substring(0, line.indexOf("(")).trim();
-                // System.out.println("TABLE NAME: " + name);
+                //System.out.println("TABLE NAME: " + name);
                 String fields = line.substring(line.indexOf("(") + 1, line.indexOf(")")).trim();
                 String[] els = fields.split(",");
                 ArrayList<String> names = new ArrayList<>();
@@ -199,15 +195,15 @@ public class Catalog {
                 Type[] typeAr = types.toArray(new Type[0]);
                 String[] namesAr = names.toArray(new String[0]);
                 TupleDesc t = new TupleDesc(typeAr, namesAr);
-                HeapFile tabHf = new HeapFile(new File(baseFolder + "/" + name + ".dat"), t);
-                addTable(tabHf, name, primaryKey);
+                HeapFile tabHf = new HeapFile(new File(baseFolder+"/"+name + ".dat"), t);
+                addTable(tabHf,name,primaryKey);
                 System.out.println("Added table : " + name + " with schema " + t);
             }
         } catch (IOException e) {
             e.printStackTrace();
             System.exit(0);
         } catch (IndexOutOfBoundsException e) {
-            System.out.println("Invalid catalog entry : " + line);
+            System.out.println ("Invalid catalog entry : " + line);
             System.exit(0);
         }
     }

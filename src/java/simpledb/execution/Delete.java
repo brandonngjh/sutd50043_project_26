@@ -29,50 +29,66 @@ public class Delete extends Operator {
      * @param child
      *            The child operator from which to read tuples for deletion
      */
+    private final TransactionId tid;
+    private OpIterator child;
+    private boolean called;
+
     public Delete(TransactionId t, OpIterator child) {
-        // some code goes here
+        this.tid = t;
+        this.child = child;
+        this.called = false;
     }
 
     public TupleDesc getTupleDesc() {
-        // some code goes here
-        return null;
+        return new TupleDesc(new Type[]{Type.INT_TYPE});
     }
 
     public void open() throws DbException, TransactionAbortedException {
-        // some code goes here
+        super.open();
+        child.open();
+        called = false;
     }
 
     public void close() {
-        // some code goes here
+        super.close();
+        child.close();
     }
 
     public void rewind() throws DbException, TransactionAbortedException {
-        // some code goes here
+        child.rewind();
+        called = false;
     }
 
     /**
-     * Deletes tuples as they are read from the child operator. Deletes are
-     * processed via the buffer pool (which can be accessed via the
-     * Database.getBufferPool() method.
-     * 
-     * @return A 1-field tuple containing the number of deleted records.
-     * @see Database#getBufferPool
-     * @see BufferPool#deleteTuple
+     * Deletes tuples as they are read from the child operator.
+     * Returns a 1-field tuple with the number of deleted records.
      */
     protected Tuple fetchNext() throws TransactionAbortedException, DbException {
-        // some code goes here
-        return null;
+        if (called) return null;
+        called = true;
+        int count = 0;
+        while (child.hasNext()) {
+            Tuple t = child.next();
+            try {
+                Database.getBufferPool().deleteTuple(tid, t);
+                count++;
+            } catch (java.io.IOException e) {
+                throw new DbException("Delete failed: " + e.getMessage());
+            }
+        }
+        Tuple result = new Tuple(getTupleDesc());
+        result.setField(0, new IntField(count));
+        return result;
     }
 
     @Override
     public OpIterator[] getChildren() {
-        // some code goes here
-        return null;
+        return new OpIterator[]{child};
     }
 
     @Override
     public void setChildren(OpIterator[] children) {
-        // some code goes here
+        child = children[0];
     }
 
 }

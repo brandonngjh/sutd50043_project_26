@@ -3,7 +3,6 @@ package simpledb.storage;
 import java.io.Serializable;
 import java.util.Arrays;
 import java.util.Iterator;
-import java.util.NoSuchElementException;
 
 /**
  * Tuple maintains information about the contents of a tuple. Tuples have a
@@ -25,10 +24,6 @@ public class Tuple implements Serializable {
      *            instance with at least one field.
      */
     public Tuple(TupleDesc td) {
-        // some code goes here
-        if (td == null) {
-            throw new IllegalArgumentException("TupleDesc cannot be null");
-        }
         this.td = td;
         this.recordId = null;
         this.fields = new Field[td.numFields()];
@@ -38,9 +33,7 @@ public class Tuple implements Serializable {
      * @return The TupleDesc representing the schema of this tuple.
      */
     public TupleDesc getTupleDesc() {
-        // some code goes here
         return this.td;
-        // return null;
     }
 
     /**
@@ -48,8 +41,6 @@ public class Tuple implements Serializable {
      *         be null.
      */
     public RecordId getRecordId() {
-        // some code goes here
-        // return null;
         return this.recordId;
     }
 
@@ -60,7 +51,6 @@ public class Tuple implements Serializable {
      *            the new RecordId for this tuple.
      */
     public void setRecordId(RecordId rid) {
-        // some code goes here
         this.recordId = rid;
     }
 
@@ -73,9 +63,6 @@ public class Tuple implements Serializable {
      *            new value for the field.
      */
     public void setField(int i, Field f) {
-        if (i < 0 || i >= fields.length) {
-            throw new NoSuchElementException();
-        }
         fields[i] = f;
     }
 
@@ -86,9 +73,6 @@ public class Tuple implements Serializable {
      *            field index to return. Must be a valid index.
      */
     public Field getField(int i) {
-        if (i < 0 || i >= fields.length) {
-            throw new NoSuchElementException();
-        }
         return fields[i];
     }
 
@@ -103,10 +87,8 @@ public class Tuple implements Serializable {
     public String toString() {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < fields.length; i++) {
-            if (i > 0) {
-                sb.append('\t');
-            }
-            sb.append(fields[i] == null ? "null" : fields[i].toString());
+            if (i > 0) sb.append("\t");
+            sb.append(fields[i]);
         }
         return sb.toString();
     }
@@ -115,14 +97,16 @@ public class Tuple implements Serializable {
      * @return
      *        An iterator which iterates over all the fields of this tuple
      * */
-    public Iterator<Field> fields() {
+    public Iterator<Field> fields()
+    {
         return Arrays.asList(fields).iterator();
     }
 
     /**
      * reset the TupleDesc of this tuple (only affecting the TupleDesc)
      * */
-    public void resetTupleDesc(TupleDesc td) {
+    public void resetTupleDesc(TupleDesc td)
+    {
         this.td = td;
     }
 }
