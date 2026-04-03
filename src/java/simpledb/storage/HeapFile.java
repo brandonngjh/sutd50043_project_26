@@ -115,15 +115,16 @@ public class HeapFile implements DbFile {
                 return modified;
             }
         }
-        HeapPageId pid = new HeapPageId(getId(), numPages());
-        HeapPage newPage = new HeapPage(pid, HeapPage.createEmptyPageData());
-        newPage.insertTuple(t);
-        writePage(newPage);
-        HeapPage page = (HeapPage) Database.getBufferPool().getPage(tid, pid, Permissions.READ_WRITE);
-        page.markDirty(true, tid);
-        List<Page> modified = new ArrayList<>();
-        modified.add(page);
-        return modified;
+        synchronized (this) {
+            HeapPageId pid = new HeapPageId(getId(), numPages());
+            writePage(new HeapPage(pid, HeapPage.createEmptyPageData()));
+            HeapPage page = (HeapPage) Database.getBufferPool().getPage(tid, pid, Permissions.READ_WRITE);
+            page.insertTuple(t);
+            page.markDirty(true, tid);
+            List<Page> modified = new ArrayList<>();
+            modified.add(page);
+            return modified;
+        }
     }
 
     // see DbFile.java for javadocs

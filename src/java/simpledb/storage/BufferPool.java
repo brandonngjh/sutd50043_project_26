@@ -3,15 +3,21 @@ package simpledb.storage;
 import simpledb.common.Database;
 import simpledb.common.Permissions;
 import simpledb.common.DbException;
-import simpledb.common.DeadlockException;
 import simpledb.transaction.TransactionAbortedException;
 import simpledb.transaction.TransactionId;
 
 import java.io.*;
-
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * BufferPool manages the reading and writing of pages into memory from
@@ -38,6 +44,7 @@ public class BufferPool {
     private final int numPages;
     private final ConcurrentHashMap<PageId, Page> pages;
     private final LinkedList<PageId> lruOrder;
+    private final LockManager lockManager;
 
     /**
      * Creates a BufferPool that caches up to numPages pages.
@@ -48,6 +55,7 @@ public class BufferPool {
         this.numPages = numPages;
         this.pages = new ConcurrentHashMap<>();
         this.lruOrder = new LinkedList<>();
+        this.lockManager = new LockManager();
     }
 
     public static int getPageSize() {
@@ -79,21 +87,24 @@ public class BufferPool {
      * @param pid the ID of the requested page
      * @param perm the requested permissions on the page
      */
-    public synchronized Page getPage(TransactionId tid, PageId pid, Permissions perm)
+    public Page getPage(TransactionId tid, PageId pid, Permissions perm)
         throws TransactionAbortedException, DbException {
-        if (pages.containsKey(pid)) {
-            lruOrder.remove(pid);
-            lruOrder.addLast(pid);
-            return pages.get(pid);
+        lockManager.acquire(tid, pid, perm);
+
+        synchronized (this) {
+            Page cached = pages.get(pid);
+            if (cached != null) {
+                touchPage(pid);
+                return cached;
+            }
+            if (pages.size() >= numPages) {
+                evictPage();
+            }
+            DbFile file = Database.getCatalog().getDatabaseFile(pid.getTableId());
+            Page page = file.readPage(pid);
+            cachePage(page);
+            return page;
         }
-        if (pages.size() >= numPages) {
-            evictPage();
-        }
-        DbFile file = Database.getCatalog().getDatabaseFile(pid.getTableId());
-        Page page = file.readPage(pid);
-        pages.put(pid, page);
-        lruOrder.addLast(pid);
-        return page;
     }
 
     /**
@@ -105,9 +116,8 @@ public class BufferPool {
      * @param tid the ID of the transaction requesting the unlock
      * @param pid the ID of the page to unlock
      */
-    public  void unsafeReleasePage(TransactionId tid, PageId pid) {
-        // some code goes here
-        // not necessary for lab1|lab2
+    public void unsafeReleasePage(TransactionId tid, PageId pid) {
+        lockManager.release(tid, pid);
     }
 
     /**
@@ -116,15 +126,12 @@ public class BufferPool {
      * @param tid the ID of the transaction requesting the unlock
      */
     public void transactionComplete(TransactionId tid) {
-        // some code goes here
-        // not necessary for lab1|lab2
+        transactionComplete(tid, true);
     }
 
     /** Return true if the specified transaction has a lock on the specified page */
     public boolean holdsLock(TransactionId tid, PageId p) {
-        // some code goes here
-        // not necessary for lab1|lab2
-        return false;
+        return lockManager.holdsLock(tid, p);
     }
 
     /**
@@ -135,8 +142,17 @@ public class BufferPool {
      * @param commit a flag indicating whether we should commit or abort
      */
     public void transactionComplete(TransactionId tid, boolean commit) {
-        // some code goes here
-        // not necessary for lab1|lab2
+        try {
+            if (commit) {
+                flushPages(tid);
+            } else {
+                restorePages(tid);
+            }
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        } finally {
+            lockManager.releaseAll(tid);
+        }
     }
 
     /**
@@ -158,8 +174,10 @@ public class BufferPool {
         throws DbException, IOException, TransactionAbortedException {
         DbFile file = Database.getCatalog().getDatabaseFile(tableId);
         List<Page> modified = file.insertTuple(tid, t);
-        for (Page p : modified) {
-            pages.put(p.getId(), p);
+        synchronized (this) {
+            for (Page p : modified) {
+                cachePage(p);
+            }
         }
     }
 
@@ -181,8 +199,10 @@ public class BufferPool {
         int tableId = t.getRecordId().getPageId().getTableId();
         DbFile file = Database.getCatalog().getDatabaseFile(tableId);
         List<Page> modified = file.deleteTuple(tid, t);
-        for (Page p : modified) {
-            pages.put(p.getId(), p);
+        synchronized (this) {
+            for (Page p : modified) {
+                cachePage(p);
+            }
         }
     }
 
@@ -192,7 +212,7 @@ public class BufferPool {
      *     break simpledb if running in NO STEAL mode.
      */
     public synchronized void flushAllPages() throws IOException {
-        for (PageId pid : pages.keySet()) {
+        for (PageId pid : new ArrayList<>(pages.keySet())) {
             flushPage(pid);
         }
     }
@@ -221,14 +241,19 @@ public class BufferPool {
             DbFile file = Database.getCatalog().getDatabaseFile(pid.getTableId());
             file.writePage(page);
             page.markDirty(false, null);
+            page.setBeforeImage();
         }
     }
 
     /** Write all pages of the specified transaction to disk.
      */
     public synchronized  void flushPages(TransactionId tid) throws IOException {
-        // some code goes here
-        // not necessary for lab1|lab2
+        for (PageId pid : new ArrayList<>(pages.keySet())) {
+            Page page = pages.get(pid);
+            if (page != null && tid.equals(page.isDirty())) {
+                flushPage(pid);
+            }
+        }
     }
 
     /**
@@ -236,15 +261,240 @@ public class BufferPool {
      * Flushes the page to disk to ensure dirty pages are updated on disk.
      */
     private synchronized void evictPage() throws DbException {
-        for (PageId pid : lruOrder) {
+        Iterator<PageId> iterator = lruOrder.iterator();
+        while (iterator.hasNext()) {
+            PageId pid = iterator.next();
             Page page = pages.get(pid);
             if (page.isDirty() == null) {
                 pages.remove(pid);
-                lruOrder.remove(pid);
+                iterator.remove();
                 return;
             }
         }
         throw new DbException("All pages in buffer pool are dirty, cannot evict");
+    }
+
+    private synchronized void cachePage(Page page) {
+        pages.put(page.getId(), page);
+        touchPage(page.getId());
+    }
+
+    private synchronized void touchPage(PageId pid) {
+        lruOrder.remove(pid);
+        lruOrder.addLast(pid);
+    }
+
+    private synchronized void restorePages(TransactionId tid) {
+        List<PageId> dirtyPages = new ArrayList<>();
+        for (Map.Entry<PageId, Page> entry : pages.entrySet()) {
+            if (tid.equals(entry.getValue().isDirty())) {
+                dirtyPages.add(entry.getKey());
+            }
+        }
+
+        for (PageId pid : dirtyPages) {
+            DbFile file = Database.getCatalog().getDatabaseFile(pid.getTableId());
+            Page cleanPage = file.readPage(pid);
+            pages.put(pid, cleanPage);
+            touchPage(pid);
+        }
+    }
+
+    private static class LockState {
+        private TransactionId exclusiveHolder;
+        private final Set<TransactionId> sharedHolders = new HashSet<>();
+    }
+
+    private static class LockManager {
+        private final Map<PageId, LockState> pageLocks = new HashMap<>();
+        private final Map<TransactionId, Set<PageId>> transactionLocks = new HashMap<>();
+        private final Map<TransactionId, Set<TransactionId>> waitsFor = new HashMap<>();
+
+        public synchronized void acquire(TransactionId tid, PageId pid, Permissions perm)
+                throws TransactionAbortedException {
+            while (true) {
+                if (canGrant(tid, pid, perm)) {
+                    grant(tid, pid, perm);
+                    clearOutgoingWaits(tid);
+                    return;
+                }
+
+                Set<TransactionId> blockers = getBlockers(tid, pid, perm);
+                waitsFor.put(tid, blockers);
+                if (hasCycle(tid)) {
+                    clearOutgoingWaits(tid);
+                    throw new TransactionAbortedException();
+                }
+
+                try {
+                    wait();
+                } catch (InterruptedException e) {
+                    clearOutgoingWaits(tid);
+                    Thread.currentThread().interrupt();
+                    throw new TransactionAbortedException();
+                }
+                clearOutgoingWaits(tid);
+            }
+        }
+
+        public synchronized void release(TransactionId tid, PageId pid) {
+            LockState state = pageLocks.get(pid);
+            if (state == null) {
+                return;
+            }
+
+            boolean changed = false;
+            if (tid.equals(state.exclusiveHolder)) {
+                state.exclusiveHolder = null;
+                changed = true;
+            }
+            if (state.sharedHolders.remove(tid)) {
+                changed = true;
+            }
+            if (!changed) {
+                return;
+            }
+
+            Set<PageId> heldPages = transactionLocks.get(tid);
+            if (heldPages != null) {
+                heldPages.remove(pid);
+                if (heldPages.isEmpty()) {
+                    transactionLocks.remove(tid);
+                }
+            }
+            if (state.exclusiveHolder == null && state.sharedHolders.isEmpty()) {
+                pageLocks.remove(pid);
+            }
+            notifyAll();
+        }
+
+        public synchronized void releaseAll(TransactionId tid) {
+            Set<PageId> heldPages = transactionLocks.remove(tid);
+            if (heldPages != null) {
+                for (PageId pid : new HashSet<>(heldPages)) {
+                    LockState state = pageLocks.get(pid);
+                    if (state == null) {
+                        continue;
+                    }
+                    if (tid.equals(state.exclusiveHolder)) {
+                        state.exclusiveHolder = null;
+                    }
+                    state.sharedHolders.remove(tid);
+                    if (state.exclusiveHolder == null && state.sharedHolders.isEmpty()) {
+                        pageLocks.remove(pid);
+                    }
+                }
+            }
+            clearAllWaits(tid);
+            notifyAll();
+        }
+
+        public synchronized boolean holdsLock(TransactionId tid, PageId pid) {
+            LockState state = pageLocks.get(pid);
+            if (state == null) {
+                return false;
+            }
+            return tid.equals(state.exclusiveHolder) || state.sharedHolders.contains(tid);
+        }
+
+        private boolean canGrant(TransactionId tid, PageId pid, Permissions perm) {
+            LockState state = pageLocks.get(pid);
+            if (state == null) {
+                return true;
+            }
+
+            if (perm == Permissions.READ_ONLY) {
+                return state.exclusiveHolder == null || tid.equals(state.exclusiveHolder);
+            }
+
+            if (tid.equals(state.exclusiveHolder)) {
+                return true;
+            }
+
+            if (state.exclusiveHolder != null) {
+                return false;
+            }
+
+            if (state.sharedHolders.isEmpty()) {
+                return true;
+            }
+
+            return state.sharedHolders.size() == 1 && state.sharedHolders.contains(tid);
+        }
+
+        private void grant(TransactionId tid, PageId pid, Permissions perm) {
+            LockState state = pageLocks.computeIfAbsent(pid, ignored -> new LockState());
+            transactionLocks.computeIfAbsent(tid, ignored -> new HashSet<>()).add(pid);
+
+            if (perm == Permissions.READ_ONLY) {
+                if (!tid.equals(state.exclusiveHolder)) {
+                    state.sharedHolders.add(tid);
+                }
+                return;
+            }
+
+            state.sharedHolders.remove(tid);
+            state.exclusiveHolder = tid;
+        }
+
+        private Set<TransactionId> getBlockers(TransactionId tid, PageId pid, Permissions perm) {
+            Set<TransactionId> blockers = new HashSet<>();
+            LockState state = pageLocks.get(pid);
+            if (state == null) {
+                return blockers;
+            }
+
+            if (perm == Permissions.READ_ONLY) {
+                if (state.exclusiveHolder != null && !tid.equals(state.exclusiveHolder)) {
+                    blockers.add(state.exclusiveHolder);
+                }
+                return blockers;
+            }
+
+            if (state.exclusiveHolder != null && !tid.equals(state.exclusiveHolder)) {
+                blockers.add(state.exclusiveHolder);
+            }
+            for (TransactionId holder : state.sharedHolders) {
+                if (!tid.equals(holder)) {
+                    blockers.add(holder);
+                }
+            }
+            return blockers;
+        }
+
+        private boolean hasCycle(TransactionId startTid) {
+            Deque<TransactionId> stack = new ArrayDeque<>();
+            Set<TransactionId> visited = new HashSet<>();
+            stack.push(startTid);
+
+            while (!stack.isEmpty()) {
+                TransactionId current = stack.pop();
+                Set<TransactionId> neighbors = waitsFor.get(current);
+                if (neighbors == null) {
+                    continue;
+                }
+                for (TransactionId neighbor : neighbors) {
+                    if (startTid.equals(neighbor)) {
+                        return true;
+                    }
+                    if (visited.add(neighbor)) {
+                        stack.push(neighbor);
+                    }
+                }
+            }
+            return false;
+        }
+
+        private void clearOutgoingWaits(TransactionId tid) {
+            waitsFor.remove(tid);
+        }
+
+        private void clearAllWaits(TransactionId tid) {
+            waitsFor.remove(tid);
+            for (Set<TransactionId> blockers : waitsFor.values()) {
+                blockers.remove(tid);
+            }
+        }
     }
 
 }
