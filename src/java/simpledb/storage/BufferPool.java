@@ -9,6 +9,7 @@ import simpledb.transaction.TransactionId;
 import java.io.*;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -176,6 +177,7 @@ public class BufferPool {
         List<Page> modified = file.insertTuple(tid, t);
         synchronized (this) {
             for (Page p : modified) {
+                p.markDirty(true, tid);
                 cachePage(p);
             }
         }
@@ -201,6 +203,7 @@ public class BufferPool {
         List<Page> modified = file.deleteTuple(tid, t);
         synchronized (this) {
             for (Page p : modified) {
+                p.markDirty(true, tid);
                 cachePage(p);
             }
         }
@@ -285,14 +288,17 @@ public class BufferPool {
     }
 
     private synchronized void restorePages(TransactionId tid) {
-        List<PageId> dirtyPages = new ArrayList<>();
+        Set<PageId> pagesToRestore = new HashSet<>(lockManager.getPagesHeld(tid));
         for (Map.Entry<PageId, Page> entry : pages.entrySet()) {
             if (tid.equals(entry.getValue().isDirty())) {
-                dirtyPages.add(entry.getKey());
+                pagesToRestore.add(entry.getKey());
             }
         }
 
-        for (PageId pid : dirtyPages) {
+        for (PageId pid : pagesToRestore) {
+            if (!pages.containsKey(pid)) {
+                continue;
+            }
             DbFile file = Database.getCatalog().getDatabaseFile(pid.getTableId());
             Page cleanPage = file.readPage(pid);
             pages.put(pid, cleanPage);
@@ -395,6 +401,14 @@ public class BufferPool {
                 return false;
             }
             return tid.equals(state.exclusiveHolder) || state.sharedHolders.contains(tid);
+        }
+
+        public synchronized Set<PageId> getPagesHeld(TransactionId tid) {
+            Set<PageId> heldPages = transactionLocks.get(tid);
+            if (heldPages == null) {
+                return Collections.emptySet();
+            }
+            return new HashSet<>(heldPages);
         }
 
         private boolean canGrant(TransactionId tid, PageId pid, Permissions perm) {
